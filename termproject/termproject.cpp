@@ -8,21 +8,16 @@
 #include <stdlib.h>
 #include <math.h>
 
-// [중요] stb_image 라이브러리 설정
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
-// --- 파일 읽기 함수 ---
-char* filetobuf(const char* file)
-{
-    FILE* fptr;
-    long length;
-    char* buf;
-    fptr = fopen(file, "rb");
+// --- 파일 읽기 ---
+char* filetobuf(const char* file) {
+    FILE* fptr = fopen(file, "rb");
     if (!fptr) return NULL;
     fseek(fptr, 0, SEEK_END);
-    length = ftell(fptr);
-    buf = (char*)malloc(length + 1);
+    long length = ftell(fptr);
+    char* buf = (char*)malloc(length + 1);
     fseek(fptr, 0, SEEK_SET);
     fread(buf, length, 1, fptr);
     fclose(fptr);
@@ -33,26 +28,23 @@ char* filetobuf(const char* file)
 // --- 전역 변수 ---
 GLuint shaderProgramID;
 GLuint vertexShader, fragmentShader;
-GLuint bgVAO, bgVBO;       // 배경
-GLuint carVAO, carVBO;     // 자동차
-GLuint lightVAO, lightVBO; // 가로등
+GLuint bgVAO, bgVBO;
+GLuint carVAO, carVBO;
+GLuint lightVAO, lightVBO;
 
-// 텍스처 ID 저장 변수
-GLuint roadTextureID;
-GLuint dirtTextureID;
+GLuint roadTextureID, dirtTextureID;
 
 GLuint modelLoc, viewLoc, projLoc;
-GLuint useTextureLoc; // 쉐이더에게 텍스처 쓸지 말지 알려주는 변수
+GLuint useTextureLoc, isLightSourceLoc, viewPosLoc; // 쉐이더 유니폼 위치
 
 float carX = 0.0f;
 float carZ = 0.0f;
 
-// --- 수학 헬퍼 함수 ---
+// --- 행렬 헬퍼 ---
 void setIdentityMatrix(float* mat, int size) {
     for (int i = 0; i < size * size; ++i) mat[i] = 0.0f;
     for (int i = 0; i < size; ++i) mat[i * size + i] = 1.0f;
 }
-
 void makePerspectiveMatrix(float* mat, float fov, float aspect, float nearDist, float farDist) {
     setIdentityMatrix(mat, 4);
     float tanHalfFov = tanf(fov / 2.0f);
@@ -63,37 +55,28 @@ void makePerspectiveMatrix(float* mat, float fov, float aspect, float nearDist, 
     mat[14] = -(2.0f * farDist * nearDist) / (farDist - nearDist);
     mat[15] = 0.0f;
 }
-
 void setTranslationMatrix(float* mat, float x, float y, float z) {
     setIdentityMatrix(mat, 4);
-    mat[12] = x;
-    mat[13] = y;
-    mat[14] = z;
+    mat[12] = x; mat[13] = y; mat[14] = z;
 }
 
-// --- 텍스처 로드 함수 ---
+// --- 텍스처 로드 ---
 GLuint LoadTexture(const char* filename) {
     GLuint textureID;
     glGenTextures(1, &textureID);
     glBindTexture(GL_TEXTURE_2D, textureID);
-
-    // 텍스처 반복 설정 (이미지가 작아도 계속 반복되게)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    // 텍스처 필터링 (깨짐 방지)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
     int width, height, nrChannels;
-    // 이미지 로드 (Y축 반전 처리 포함)
     stbi_set_flip_vertically_on_load(true);
     unsigned char* data = stbi_load(filename, &width, &height, &nrChannels, 0);
-
     if (data) {
         GLenum format = (nrChannels == 4) ? GL_RGBA : GL_RGB;
         glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
         glGenerateMipmap(GL_TEXTURE_2D);
-        std::cout << "Texture Loaded: " << filename << std::endl;
     }
     else {
         std::cerr << "Failed to load texture: " << filename << std::endl;
@@ -102,75 +85,48 @@ GLuint LoadTexture(const char* filename) {
     return textureID;
 }
 
-// --- 셰이더 생성 ---
-void make_vertexShaders() {
-    GLchar* vertexSource = filetobuf("vertex.glsl");
-    if (!vertexSource) exit(EXIT_FAILURE);
+// --- 쉐이더 컴파일 ---
+void make_Shaders() {
+    GLchar* vSrc = filetobuf("vertex.glsl");
+    GLchar* fSrc = filetobuf("fragment.glsl");
+    if (!vSrc || !fSrc) { std::cerr << "Shader file not found!" << std::endl; exit(1); }
     vertexShader = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vertexShader, 1, &vertexSource, NULL);
-    glCompileShader(vertexShader);
-    free(vertexSource);
-}
-
-void make_fragmentShaders() {
-    GLchar* fragmentSource = filetobuf("fragment.glsl");
-    if (!fragmentSource) exit(EXIT_FAILURE);
     fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fragmentShader, 1, &fragmentSource, NULL);
+    glShaderSource(vertexShader, 1, &vSrc, NULL);
+    glShaderSource(fragmentShader, 1, &fSrc, NULL);
+    glCompileShader(vertexShader);
     glCompileShader(fragmentShader);
-    free(fragmentSource);
-}
-
-GLuint make_shaderProgram() {
-    GLuint shaderID = glCreateProgram();
-    glAttachShader(shaderID, vertexShader);
-    glAttachShader(shaderID, fragmentShader);
-    glLinkProgram(shaderID);
+    shaderProgramID = glCreateProgram();
+    glAttachShader(shaderProgramID, vertexShader);
+    glAttachShader(shaderProgramID, fragmentShader);
+    glLinkProgram(shaderProgramID);
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
-    glUseProgram(shaderID);
-    return shaderID;
+    free(vSrc); free(fSrc);
 }
 
-// --- 1. 배경 (텍스처 좌표 포함) ---
+// --- 데이터 초기화 (XYZ RGB UV Normal) ---
+// 정점 데이터 구조: 3(Pos) + 3(Color) + 2(UV) + 3(Normal) = 11 floats
 void initBuffer() {
-    float w = 2.0f;
-    float sw = 1.5f;
-    float l = 300.0f;
-
-    // 텍스처 반복 횟수 (길이가 300이니 30번 반복해서 선명하게)
-    float repeat = 30.0f;
-
-    // Vertex 구조: x, y, z (위치) | r, g, b (색상-무시됨) | u, v (텍스처좌표)
-    // 텍스처 좌표(UV): (0,0) ~ (1, repeat)
-
+    float w = 2.0f; float sw = 1.5f; float l = 300.0f; float repeat = 30.0f;
     std::vector<float> v;
 
-    // 사각형 추가 헬퍼 (텍스처 좌표 포함)
-    auto addRectUV = [&](float x1, float z1, float x2, float z2, float y, float uMax, float vMax) {
-        // Triangle 1
-        v.insert(v.end(), { x1, y, z1, 0,0,0,  0.0f, vMax });    // 좌상단
-        v.insert(v.end(), { x2, y, z1, 0,0,0,  uMax, vMax });    // 우상단
-        v.insert(v.end(), { x2, y, z2, 0,0,0,  uMax, 0.0f });    // 우하단
-        // Triangle 2
-        v.insert(v.end(), { x1, y, z1, 0,0,0,  0.0f, vMax });    // 좌상단
-        v.insert(v.end(), { x2, y, z2, 0,0,0,  uMax, 0.0f });    // 우하단
-        v.insert(v.end(), { x1, y, z2, 0,0,0,  0.0f, 0.0f });    // 좌하단
+    // 사각형 추가 (바닥은 Normal이 항상 0, 1, 0)
+    auto addRect = [&](float x1, float z1, float x2, float z2, float y, float uMax, float vMax) {
+        float ny = 1.0f; // 법선: 위쪽 방향
+        // Tri 1
+        v.insert(v.end(), { x1, y, z1, 1,1,1, 0.0f, vMax, 0, ny, 0 });
+        v.insert(v.end(), { x2, y, z1, 1,1,1, uMax, vMax, 0, ny, 0 });
+        v.insert(v.end(), { x2, y, z2, 1,1,1, uMax, 0.0f, 0, ny, 0 });
+        // Tri 2
+        v.insert(v.end(), { x1, y, z1, 1,1,1, 0.0f, vMax, 0, ny, 0 });
+        v.insert(v.end(), { x2, y, z2, 1,1,1, uMax, 0.0f, 0, ny, 0 });
+        v.insert(v.end(), { x1, y, z2, 1,1,1, 0.0f, 0.0f, 0, ny, 0 });
         };
 
-    // 1. 도로 (아스팔트 텍스처)
-    // -2.0 ~ 2.0 (폭 4.0), 길이 300
-    // 아스팔트는 가로로 1번, 세로로 repeat번 반복
-    addRectUV(-w, 10.0f, w, -l, -0.5f, 1.0f, repeat);
-
-    // 2. 왼쪽 인도 (흙 텍스처)
-    addRectUV(-w - sw, 10.0f, -w, -l, -0.5f, 1.0f, repeat);
-
-    // 3. 오른쪽 인도 (흙 텍스처)
-    addRectUV(w, 10.0f, w + sw, -l, -0.5f, 1.0f, repeat);
-
-    // *중앙선은 텍스처 대신 그냥 색상으로 그릴 것이므로 여기 넣지 않고 따로 빼거나,
-    // 간단하게 도로 텍스처 위에 얇은 폴리곤을 띄워서 그림 (기존 방식 유지)
+    addRect(-w, 10.0f, w, -l, -0.5f, 1.0f, repeat); // 도로
+    addRect(-w - sw, 10.0f, -w, -l, -0.5f, 1.0f, repeat); // 왼쪽 인도
+    addRect(w, 10.0f, w + sw, -l, -0.5f, 1.0f, repeat); // 오른쪽 인도
 
     glGenVertexArrays(1, &bgVAO);
     glGenBuffers(1, &bgVBO);
@@ -178,118 +134,74 @@ void initBuffer() {
     glBindBuffer(GL_ARRAY_BUFFER, bgVBO);
     glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(float), v.data(), GL_STATIC_DRAW);
 
-    // Stride가 8 * sizeof(float)로 변경됨 (XYZ RGB UV)
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
-    glEnableVertexAttribArray(2);
+    int stride = 11 * sizeof(float);
+    // Attribute 0: Pos, 1: Color, 2: TexCoord, 3: Normal
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0); glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)(3 * sizeof(float))); glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, (void*)(6 * sizeof(float))); glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, stride, (void*)(8 * sizeof(float))); glEnableVertexAttribArray(3);
 }
 
-// --- 2. 가로등 (Color만 사용, UV는 0) ---
-void initStreetLightBuffer() {
+// 큐브 생성 함수 (법선 벡터 포함)
+void initCubeObj(GLuint* vao, GLuint* vbo, bool isCar) {
     std::vector<float> v;
-    auto addCube = [&](float x, float y, float z, float sx, float sy, float sz, float r, float g, float b) {
+    // 큐브 생성 헬퍼 (각 면마다 법선 벡터 다르게 설정)
+    auto addFace = [&](float x, float y, float z, float sx, float sy, float sz, float r, float g, float b) {
         float dx = sx / 2, dy = sy / 2, dz = sz / 2;
-        // 8개의 데이터 (XYZ RGB UV) -> UV는 (0,0)으로 더미값 넣음
-        float faces[] = {
-            // Front
-            x - dx, y - dy, z + dz, r,g,b, 0,0,  x + dx, y - dy, z + dz, r,g,b, 0,0,  x + dx, y + dy, z + dz, r,g,b, 0,0,
-            x - dx, y - dy, z + dz, r,g,b, 0,0,  x + dx, y + dy, z + dz, r,g,b, 0,0,  x - dx, y + dy, z + dz, r,g,b, 0,0,
-            // Back
-            x - dx, y - dy, z - dz, r,g,b, 0,0,  x + dx, y - dy, z - dz, r,g,b, 0,0,  x + dx, y + dy, z - dz, r,g,b, 0,0,
-            x - dx, y - dy, z - dz, r,g,b, 0,0,  x + dx, y + dy, z - dz, r,g,b, 0,0,  x - dx, y + dy, z - dz, r,g,b, 0,0,
-            // Top
-            x - dx, y + dy, z + dz, r,g,b, 0,0,  x + dx, y + dy, z + dz, r,g,b, 0,0,  x + dx, y + dy, z - dz, r,g,b, 0,0,
-            x - dx, y + dy, z + dz, r,g,b, 0,0,  x + dx, y + dy, z - dz, r,g,b, 0,0,  x - dx, y + dy, z - dz, r,g,b, 0,0,
-            // Bottom
-            x - dx, y - dy, z + dz, r,g,b, 0,0,  x + dx, y - dy, z + dz, r,g,b, 0,0,  x + dx, y - dy, z - dz, r,g,b, 0,0,
-            x - dx, y - dy, z + dz, r,g,b, 0,0,  x + dx, y - dy, z - dz, r,g,b, 0,0,  x - dx, y - dy, z - dz, r,g,b, 0,0,
-            // Left
-            x - dx, y - dy, z - dz, r,g,b, 0,0,  x - dx, y - dy, z + dz, r,g,b, 0,0,  x - dx, y + dy, z + dz, r,g,b, 0,0,
-            x - dx, y - dy, z - dz, r,g,b, 0,0,  x - dx, y + dy, z + dz, r,g,b, 0,0,  x - dx, y + dy, z - dz, r,g,b, 0,0,
-            // Right
-            x + dx, y - dy, z - dz, r,g,b, 0,0,  x + dx, y - dy, z + dz, r,g,b, 0,0,  x + dx, y + dy, z + dz, r,g,b, 0,0,
-            x + dx, y - dy, z - dz, r,g,b, 0,0,  x + dx, y + dy, z + dz, r,g,b, 0,0,  x + dx, y + dy, z - dz, r,g,b, 0,0,
-        };
-        v.insert(v.end(), std::begin(faces), std::end(faces));
+        // 각 면의 법선 벡터 (Front, Back, Top, Bottom, Left, Right)
+        float normals[6][3] = { {0,0,1}, {0,0,-1}, {0,1,0}, {0,-1,0}, {-1,0,0}, {1,0,0} };
+        // 정점 위치 
+        float pos[6][4][3] = {
+            {{x - dx, y - dy, z + dz}, {x + dx, y - dy, z + dz}, {x + dx, y + dy, z + dz}, {x - dx, y + dy, z + dz}}, // Front
+            {{x - dx, y - dy, z - dz}, {x + dx, y - dy, z - dz}, {x + dx, y + dy, z - dz}, {x - dx, y + dy, z - dz}}, // Back
+            {{x - dx, y + dy, z + dz}, {x + dx, y + dy, z + dz}, {x + dx, y + dy, z - dz}, {x - dx, y + dy, z - dz}}, // Top
+            {{x - dx, y - dy, z + dz}, {x + dx, y - dy, z + dz}, {x + dx, y - dy, z - dz}, {x - dx, y - dy, z - dz}}, // Bottom
+            {{x - dx, y - dy, z - dz}, {x - dx, y - dy, z + dz}, {x - dx, y + dy, z + dz}, {x - dx, y + dy, z - dz}}, // Left
+            {{x + dx, y - dy, z - dz}, {x + dx, y - dy, z + dz}, {x + dx, y + dy, z + dz}, {x + dx, y + dy, z - dz}}  // Right
         };
 
-    addCube(0.0f, 1.5f, 0.0f, 0.2f, 3.0f, 0.2f, 0.5f, 0.5f, 0.5f);
-    addCube(0.6f, 2.9f, 0.0f, 1.2f, 0.15f, 0.15f, 0.5f, 0.5f, 0.5f);
-    addCube(1.1f, 2.7f, 0.0f, 0.3f, 0.3f, 0.3f, 1.0f, 1.0f, 0.5f);
-
-    glGenVertexArrays(1, &lightVAO);
-    glGenBuffers(1, &lightVBO);
-    glBindVertexArray(lightVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, lightVBO);
-    glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(float), v.data(), GL_STATIC_DRAW);
-
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
-    glEnableVertexAttribArray(2);
-}
-
-// --- 3. 자동차 데이터 (Color만 사용) ---
-void initCarBuffer() {
-    float s = 0.25f; float r = 1.0f, g = 0.2f, b = 0.2f;
-    std::vector<float> v;
-    // 육면체 만들기 (XYZ RGB UV)
-    auto addFace = [&](float* pts) {
-        for (int i = 0; i < 18; i += 3) { // 6 points * 3 coords
-            v.push_back(pts[i]); v.push_back(pts[i + 1]); v.push_back(pts[i + 2]); // XYZ
-            v.push_back(r); v.push_back(g); v.push_back(b); // RGB
-            v.push_back(0.0f); v.push_back(0.0f); // UV (Dummy)
+        int indices[] = { 0, 1, 2, 0, 2, 3 }; // 삼각형 2개 인덱스
+        for (int i = 0; i < 6; ++i) { // 6면 루프
+            for (int j = 0; j < 6; ++j) { // 정점 6개
+                int idx = indices[j];
+                v.push_back(pos[i][idx][0]); v.push_back(pos[i][idx][1]); v.push_back(pos[i][idx][2]); // Pos
+                v.push_back(r); v.push_back(g); v.push_back(b); // Color
+                v.push_back(0.0f); v.push_back(0.0f); // UV (사용 안 함)
+                v.push_back(normals[i][0]); v.push_back(normals[i][1]); v.push_back(normals[i][2]); // Normal
+            }
         }
         };
-    // (간단화를 위해 기존 정점 데이터에 UV 0,0만 추가하는 로직으로 대체 가능하지만,
-    //  여기선 코드가 길어지므로 개념적으로만 설명: XYZRGB -> XYZRGBUV 변환 필요)
-    //  직접 데이터 입력 (축약함)
-    float vertices[] = {
-        // Front (XYZ RGB UV)
-        -s, -s,  s, r,g,b, 0,0,  s, -s,  s, r,g,b, 0,0,  s,  s,  s, r,g,b, 0,0,
-        -s, -s,  s, r,g,b, 0,0,  s,  s,  s, r,g,b, 0,0, -s,  s,  s, r,g,b, 0,0,
-        // ... (나머지 면들도 0,0 UV 추가해야 함. 생략 없이 아래에 풀 버전)
-        // Back
-        -s, -s, -s, r,g,b, 0,0,  s, -s, -s, r,g,b, 0,0,  s,  s, -s, r,g,b, 0,0,
-        -s, -s, -s, r,g,b, 0,0,  s,  s, -s, r,g,b, 0,0, -s,  s, -s, r,g,b, 0,0,
-        // Top
-       -s,  s,  s, r,g,b, 0,0,  s,  s,  s, r,g,b, 0,0,  s,  s, -s, r,g,b, 0,0,
-       -s,  s,  s, r,g,b, 0,0,  s,  s, -s, r,g,b, 0,0, -s,  s, -s, r,g,b, 0,0,
-       // Bottom
-      -s, -s,  s, r,g,b, 0,0,  s, -s,  s, r,g,b, 0,0,  s, -s, -s, r,g,b, 0,0,
-      -s, -s,  s, r,g,b, 0,0,  s, -s, -s, r,g,b, 0,0, -s, -s, -s, r,g,b, 0,0,
-      // Left
-     -s, -s, -s, r,g,b, 0,0, -s, -s,  s, r,g,b, 0,0, -s,  s,  s, r,g,b, 0,0,
-     -s, -s, -s, r,g,b, 0,0, -s,  s,  s, r,g,b, 0,0, -s,  s, -s, r,g,b, 0,0,
-     // Right
-     s, -s, -s, r,g,b, 0,0,  s, -s,  s, r,g,b, 0,0,  s,  s,  s, r,g,b, 0,0,
-     s, -s, -s, r,g,b, 0,0,  s,  s,  s, r,g,b, 0,0,  s,  s, -s, r,g,b, 0,0,
-    };
 
-    glGenVertexArrays(1, &carVAO);
-    glGenBuffers(1, &carVBO);
-    glBindVertexArray(carVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, carVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    if (isCar) {
+        addFace(0, 0, 0, 0.5f, 0.5f, 0.5f, 1.0f, 0.2f, 0.2f); // 빨간 자동차
+    }
+    else { // 가로등 모델
+        addFace(0.0f, 1.5f, 0.0f, 0.2f, 3.0f, 0.2f, 0.5f, 0.5f, 0.5f); // 기둥
+        addFace(0.6f, 2.9f, 0.0f, 1.2f, 0.15f, 0.15f, 0.5f, 0.5f, 0.5f); // 팔
+        addFace(1.1f, 2.7f, 0.0f, 0.3f, 0.3f, 0.3f, 1.0f, 1.0f, 0.5f); // 전구
+    }
 
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
-    glEnableVertexAttribArray(2);
+    glGenVertexArrays(1, vao);
+    glGenBuffers(1, vbo);
+    glBindVertexArray(*vao);
+    glBindBuffer(GL_ARRAY_BUFFER, *vbo);
+    glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(float), v.data(), GL_STATIC_DRAW);
+
+    int stride = 11 * sizeof(float);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0); glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)(3 * sizeof(float))); glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, (void*)(6 * sizeof(float))); glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, stride, (void*)(8 * sizeof(float))); glEnableVertexAttribArray(3);
 }
 
-// --- 그리기 함수 ---
+
 GLvoid drawScene() {
-    glClearColor(0.05f, 0.05f, 0.1f, 1.0f);
+    glClearColor(0.05f, 0.05f, 0.1f, 1.0f); // 밤하늘 배경
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glUseProgram(shaderProgramID);
+
+    // [중요] 카메라 위치 전송 (반사광 계산용)
+    glUniform3f(viewPosLoc, carX, 1.5f, carZ + 4.0f);
 
     float view[16];
     setIdentityMatrix(view, 4);
@@ -300,44 +212,88 @@ GLvoid drawScene() {
     makePerspectiveMatrix(projection, 3.141592f / 4.0f, 800.0f / 600.0f, 0.1f, 300.0f);
     glUniformMatrix4fv(projLoc, 1, GL_FALSE, projection);
 
+    // --- 동적 조명 시스템 ---
+    // 가로등 간격은 20.0f입니다. 자동차(carZ) 위치를 기준으로 가장 가까운 가로등 인덱스를 찾습니다.
+    int centerIdx = (int)(abs(carZ) / 20.0f);
+    int lightCount = 0;
+
+    char uniformName[64];
+    // 차 주변 가로등 4개만 활성화 (앞뒤로)
+    for (int i = centerIdx - 1; i <= centerIdx + 2; ++i) {
+        if (lightCount >= 4) break;
+        float lightZ = -(float)i * 20.0f;
+
+        // 쉐이더의 pointLights[0], pointLights[1]... 에 값 넣기
+        sprintf(uniformName, "pointLights[%d].position", lightCount);
+        // 왼쪽 가로등의 전구 위치 (-2.5(인도) + 1.1(팔끝))
+        glUniform3f(glGetUniformLocation(shaderProgramID, uniformName), -1.4f, 2.7f, lightZ);
+
+        sprintf(uniformName, "pointLights[%d].color", lightCount);
+        glUniform3f(glGetUniformLocation(shaderProgramID, uniformName), 1.0f, 0.9f, 0.6f); // 따뜻한 노란빛
+
+        // 빛의 감쇠(Attenuation) 설정 - 거리에 따라 어두워짐
+        sprintf(uniformName, "pointLights[%d].constant", lightCount);
+        glUniform1f(glGetUniformLocation(shaderProgramID, uniformName), 1.0f);
+        sprintf(uniformName, "pointLights[%d].linear", lightCount);
+        glUniform1f(glGetUniformLocation(shaderProgramID, uniformName), 0.09f);
+        sprintf(uniformName, "pointLights[%d].quadratic", lightCount);
+        glUniform1f(glGetUniformLocation(shaderProgramID, uniformName), 0.032f);
+
+        lightCount++;
+    }
+
     float model[16];
     setIdentityMatrix(model, 4);
     glUniformMatrix4fv(modelLoc, 1, GL_FALSE, model);
 
-    // [1] 배경 그리기 (텍스처 사용)
-    glUniform1i(useTextureLoc, 1); // 텍스처 사용 ON
+    // 1. 배경 그리기 (Texture ON, Light Source OFF)
+    glUniform1i(useTextureLoc, 1);
+    glUniform1i(isLightSourceLoc, 0); // 빛을 받아야 함
 
     glBindVertexArray(bgVAO);
-
-    // 1-1. 도로 그리기 (0~5 정점: 아스팔트)
     glBindTexture(GL_TEXTURE_2D, roadTextureID);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
-
-    // 1-2. 인도 그리기 (6~17 정점: 흙)
+    glDrawArrays(GL_TRIANGLES, 0, 6); // 도로
     glBindTexture(GL_TEXTURE_2D, dirtTextureID);
-    glDrawArrays(GL_TRIANGLES, 6, 12);
-
-    // [2] 텍스처 끄기 (가로등, 자동차는 단순 색상)
-    glUniform1i(useTextureLoc, 0); // 텍스처 사용 OFF
+    glDrawArrays(GL_TRIANGLES, 6, 12); // 인도
 
     // 2. 가로등 그리기
+    glUniform1i(useTextureLoc, 0);
     glBindVertexArray(lightVAO);
     for (float z = 0.0f; z > -300.0f; z -= 20.0f) {
+        // (1) 기둥과 팔 (빛 받음)
+        glUniform1i(isLightSourceLoc, 0);
+
+        // 왼쪽
         setTranslationMatrix(model, -2.5f, -0.5f, z);
         glUniformMatrix4fv(modelLoc, 1, GL_FALSE, model);
-        glDrawArrays(GL_TRIANGLES, 0, 108);
+        glDrawArrays(GL_TRIANGLES, 0, 72); // 기둥+팔 (36*2)
 
+        // 오른쪽 (대칭)
+        setTranslationMatrix(model, 2.5f, -0.5f, z);
+        model[0] = -1.0f; // X축 반전
+        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, model);
+        glDrawArrays(GL_TRIANGLES, 0, 72);
+
+        // (2) 전구 (스스로 빛남 - 그림자 안 짐)
+        glUniform1i(isLightSourceLoc, 1);
+
+        // 왼쪽 전구
+        setTranslationMatrix(model, -2.5f, -0.5f, z);
+        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, model);
+        glDrawArrays(GL_TRIANGLES, 72, 36);
+
+        // 오른쪽 전구
         setTranslationMatrix(model, 2.5f, -0.5f, z);
         model[0] = -1.0f;
         glUniformMatrix4fv(modelLoc, 1, GL_FALSE, model);
-        glDrawArrays(GL_TRIANGLES, 0, 108);
+        glDrawArrays(GL_TRIANGLES, 72, 36);
     }
 
-    // 3. 자동차 그리기
+    // 3. 자동차 (빛 받음)
+    glUniform1i(isLightSourceLoc, 0);
     setTranslationMatrix(model, carX, -0.25f, carZ);
     model[0] = 1.0f;
     glUniformMatrix4fv(modelLoc, 1, GL_FALSE, model);
-
     glBindVertexArray(carVAO);
     glDrawArrays(GL_TRIANGLES, 0, 36);
 
@@ -362,28 +318,27 @@ int main(int argc, char** argv) {
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA | GLUT_DEPTH);
     glutInitWindowPosition(100, 100);
     glutInitWindowSize(800, 600);
-    glutCreateWindow("Final Project - Textured Road");
+    glutCreateWindow("Final Project - Street Lights");
 
     glewExperimental = GL_TRUE;
     if (glewInit() != GLEW_OK) exit(EXIT_FAILURE);
     glEnable(GL_DEPTH_TEST);
 
-    make_vertexShaders();
-    make_fragmentShaders();
-    shaderProgramID = make_shaderProgram();
+    make_Shaders();
 
     modelLoc = glGetUniformLocation(shaderProgramID, "model");
     viewLoc = glGetUniformLocation(shaderProgramID, "view");
     projLoc = glGetUniformLocation(shaderProgramID, "projection");
     useTextureLoc = glGetUniformLocation(shaderProgramID, "useTexture");
+    isLightSourceLoc = glGetUniformLocation(shaderProgramID, "isLightSource");
+    viewPosLoc = glGetUniformLocation(shaderProgramID, "viewPos");
 
-    // [중요] 텍스처 로드 (파일 이름이 정확해야 함)
     roadTextureID = LoadTexture("road.png");
     dirtTextureID = LoadTexture("dirt.png");
 
     initBuffer();
-    initStreetLightBuffer();
-    initCarBuffer();
+    initCubeObj(&lightVAO, &lightVBO, false); // 가로등
+    initCubeObj(&carVAO, &carVBO, true);      // 차
 
     glutDisplayFunc(drawScene);
     glutReshapeFunc(Reshape);
