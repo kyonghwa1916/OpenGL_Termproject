@@ -29,3 +29,6 @@ x86/
 # Visual Studio cache/options
 .vscode/
 *.vcxproj.user
+
+# Windows special files
+nul
