@@ -39,6 +39,7 @@ GLuint useTextureLoc, isLightSourceLoc, viewPosLoc; // 쉐이더 유니폼 위�
 
 float carX = 0.0f;
 float carZ = 0.0f;
+float carAngle = 0.0f; // Y축 회전 각도 (라디안)
 
 // --- 행렬 헬퍼 ---
 void setIdentityMatrix(float* mat, int size) {
@@ -58,6 +59,25 @@ void makePerspectiveMatrix(float* mat, float fov, float aspect, float nearDist, 
 void setTranslationMatrix(float* mat, float x, float y, float z) {
     setIdentityMatrix(mat, 4);
     mat[12] = x; mat[13] = y; mat[14] = z;
+}
+void setRotationYMatrix(float* mat, float angle) {
+    setIdentityMatrix(mat, 4);
+    float c = cosf(angle);
+    float s = sinf(angle);
+    mat[0] = c;  mat[2] = s;
+    mat[8] = -s; mat[10] = c;
+}
+void multiplyMatrix(float* result, const float* a, const float* b) {
+    float temp[16];
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 4; ++j) {
+            temp[i * 4 + j] = 0.0f;
+            for (int k = 0; k < 4; ++k) {
+                temp[i * 4 + j] += a[i * 4 + k] * b[k * 4 + j];
+            }
+        }
+    }
+    for (int i = 0; i < 16; ++i) result[i] = temp[i];
 }
 
 // --- 텍스처 로드 ---
@@ -173,7 +193,39 @@ void initCubeObj(GLuint* vao, GLuint* vbo, bool isCar) {
         };
 
     if (isCar) {
-        addFace(0, 0, 0, 0.5f, 0.5f, 0.5f, 1.0f, 0.2f, 0.2f); // 빨간 자동차
+        // 자동차 모델 - 차체(body) + 캐빈(cabin) + 바퀴(wheels)
+        // Z 좌표를 반전시켜 자동차가 -Z 방향을 향하도록 수정
+
+        // 1. 차체 하부 (Lower Body) - 빨간색
+        addFace(0.0f, 0.0f, 0.0f, 0.8f, 0.25f, 1.2f, 0.8f, 0.1f, 0.1f);
+
+        // 2. 캐빈 (Cabin/Roof) - 약간 어두운 빨간색, 뒤쪽에 배치
+        addFace(0.0f, 0.25f, 0.15f, 0.6f, 0.3f, 0.6f, 0.6f, 0.05f, 0.05f);
+
+        // 3. 본넷/후드 (Hood) - 앞쪽 경사
+        addFace(0.0f, 0.05f, -0.5f, 0.6f, 0.15f, 0.4f, 0.9f, 0.15f, 0.15f);
+
+        // 4. 바퀴 4개 - 검은색
+        float wheelRadius = 0.15f;
+        float wheelWidth = 0.12f;
+        float wheelBaseX = 0.45f; // 차체 폭의 바깥쪽
+        float wheelBaseZ = 0.4f;  // 앞뒤 간격
+
+        // 왼쪽 앞 바퀴
+        addFace(-wheelBaseX, -0.125f + wheelRadius, -wheelBaseZ, wheelWidth, wheelRadius * 2, wheelRadius * 2, 0.1f, 0.1f, 0.1f);
+        // 오른쪽 앞 바퀴
+        addFace(wheelBaseX, -0.125f + wheelRadius, -wheelBaseZ, wheelWidth, wheelRadius * 2, wheelRadius * 2, 0.1f, 0.1f, 0.1f);
+        // 왼쪽 뒤 바퀴
+        addFace(-wheelBaseX, -0.125f + wheelRadius, wheelBaseZ, wheelWidth, wheelRadius * 2, wheelRadius * 2, 0.1f, 0.1f, 0.1f);
+        // 오른쪽 뒤 바퀴
+        addFace(wheelBaseX, -0.125f + wheelRadius, wheelBaseZ, wheelWidth, wheelRadius * 2, wheelRadius * 2, 0.1f, 0.1f, 0.1f);
+
+        // 5. 앞 유리창 (Windshield) - 하늘색 (유리 느낌)
+        addFace(0.0f, 0.3f, -0.15f, 0.55f, 0.2f, 0.15f, 0.3f, 0.5f, 0.7f);
+
+        // 6. 헤드라이트 2개 - 노란색
+        addFace(-0.25f, 0.0f, -0.62f, 0.12f, 0.08f, 0.04f, 1.0f, 1.0f, 0.6f);
+        addFace(0.25f, 0.0f, -0.62f, 0.12f, 0.08f, 0.04f, 1.0f, 1.0f, 0.6f);
     }
     else { // 가로등 모델
         addFace(0.0f, 1.5f, 0.0f, 0.2f, 3.0f, 0.2f, 0.5f, 0.5f, 0.5f); // 기둥
@@ -291,11 +343,16 @@ GLvoid drawScene() {
 
     // 3. 자동차 (빛 받음)
     glUniform1i(isLightSourceLoc, 0);
-    setTranslationMatrix(model, carX, -0.25f, carZ);
-    model[0] = 1.0f;
+    float rot[16];
+    setRotationYMatrix(rot, carAngle);
+    // 회전 행렬에 이동 포함 (해당 위치에서 회전)
+    rot[12] = carX;
+    rot[13] = -0.25f;
+    rot[14] = carZ;
+    for (int i = 0; i < 16; ++i) model[i] = rot[i];
     glUniformMatrix4fv(modelLoc, 1, GL_FALSE, model);
     glBindVertexArray(carVAO);
-    glDrawArrays(GL_TRIANGLES, 0, 36);
+    glDrawArrays(GL_TRIANGLES, 0, 360); // 10개 부품 × 36 정점
 
     glutSwapBuffers();
 }
@@ -304,11 +361,25 @@ GLvoid Reshape(int w, int h) { glViewport(0, 0, w, h); }
 void Keyboard(unsigned char key, int x, int y) { if (key == 'q' || key == 'Q' || key == 27) exit(0); glutPostRedisplay(); }
 void SpecialKeyboard(int key, int x, int y) {
     float speed = 0.5f;
+    float rotSpeed = 0.1f; // 회전 속도 (라디안)
+
+    // 자동차의 전방 벡터 계산 (자동차는 로컬 -Z 방향을 바라봄)
+    float forwardX = sinf(carAngle);
+    float forwardZ = -cosf(carAngle);
+
     switch (key) {
-    case GLUT_KEY_UP:    carZ -= speed; break;
-    case GLUT_KEY_DOWN:  carZ += speed; break;
-    case GLUT_KEY_LEFT:  carX -= speed; break;
-    case GLUT_KEY_RIGHT: carX += speed; break;
+    case GLUT_KEY_UP:
+        // 자동차 정면 방향으로 전진
+        carX += speed * forwardX;
+        carZ += speed * forwardZ;
+        break;
+    case GLUT_KEY_DOWN:
+        // 자동차 후면 방향으로 후진
+        carX -= speed * forwardX;
+        carZ -= speed * forwardZ;
+        break;
+    case GLUT_KEY_LEFT:  carAngle -= rotSpeed; break; // Y축 기준 왼쪽 회전 (제자리)
+    case GLUT_KEY_RIGHT: carAngle += rotSpeed; break; // Y축 기준 오른쪽 회전 (제자리)
     }
     glutPostRedisplay();
 }
