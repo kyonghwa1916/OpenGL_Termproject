@@ -41,6 +41,9 @@ float carX = 0.0f;
 float carZ = 0.0f;
 float carAngle = 0.0f; // Y축 회전 각도 (라디안)
 
+// 키 상태 추적
+bool specialKeyStates[256] = { false };
+
 // --- 행렬 헬퍼 ---
 void setIdentityMatrix(float* mat, int size) {
     for (int i = 0; i < size * size; ++i) mat[i] = 0.0f;
@@ -165,6 +168,70 @@ void initBuffer() {
 // 큐브 생성 함수 (법선 벡터 포함)
 void initCubeObj(GLuint* vao, GLuint* vbo, bool isCar) {
     std::vector<float> v;
+
+    // 원통(실린더) 생성 헬퍼 - X축 방향으로 뻗은 실린더
+    auto addCylinder = [&](float x, float y, float z, float radius, float height, float r, float g, float b) {
+        const int segments = 16; // 원의 분할 수
+        const float PI = 3.141592f;
+
+        // 옆면 (측면)
+        for (int i = 0; i < segments; ++i) {
+            float angle1 = (float)i / segments * 2.0f * PI;
+            float angle2 = (float)(i + 1) / segments * 2.0f * PI;
+
+            float y1 = cosf(angle1) * radius;
+            float z1 = sinf(angle1) * radius;
+            float y2 = cosf(angle2) * radius;
+            float z2 = sinf(angle2) * radius;
+
+            // 법선 벡터 (방사형)
+            float ny1 = cosf(angle1);
+            float nz1 = sinf(angle1);
+            float ny2 = cosf(angle2);
+            float nz2 = sinf(angle2);
+
+            // 삼각형 1
+            v.insert(v.end(), {x - height/2, y + y1, z + z1, r, g, b, 0, 0, 0, ny1, nz1});
+            v.insert(v.end(), {x + height/2, y + y1, z + z1, r, g, b, 0, 0, 0, ny1, nz1});
+            v.insert(v.end(), {x + height/2, y + y2, z + z2, r, g, b, 0, 0, 0, ny2, nz2});
+
+            // 삼각형 2
+            v.insert(v.end(), {x - height/2, y + y1, z + z1, r, g, b, 0, 0, 0, ny1, nz1});
+            v.insert(v.end(), {x + height/2, y + y2, z + z2, r, g, b, 0, 0, 0, ny2, nz2});
+            v.insert(v.end(), {x - height/2, y + y2, z + z2, r, g, b, 0, 0, 0, ny2, nz2});
+        }
+
+        // 왼쪽 원판 (법선: -1, 0, 0)
+        for (int i = 0; i < segments; ++i) {
+            float angle1 = (float)i / segments * 2.0f * PI;
+            float angle2 = (float)(i + 1) / segments * 2.0f * PI;
+
+            float y1 = cosf(angle1) * radius;
+            float z1 = sinf(angle1) * radius;
+            float y2 = cosf(angle2) * radius;
+            float z2 = sinf(angle2) * radius;
+
+            v.insert(v.end(), {x - height/2, y, z, r, g, b, 0, 0, -1, 0, 0});
+            v.insert(v.end(), {x - height/2, y + y2, z + z2, r, g, b, 0, 0, -1, 0, 0});
+            v.insert(v.end(), {x - height/2, y + y1, z + z1, r, g, b, 0, 0, -1, 0, 0});
+        }
+
+        // 오른쪽 원판 (법선: 1, 0, 0)
+        for (int i = 0; i < segments; ++i) {
+            float angle1 = (float)i / segments * 2.0f * PI;
+            float angle2 = (float)(i + 1) / segments * 2.0f * PI;
+
+            float y1 = cosf(angle1) * radius;
+            float z1 = sinf(angle1) * radius;
+            float y2 = cosf(angle2) * radius;
+            float z2 = sinf(angle2) * radius;
+
+            v.insert(v.end(), {x + height/2, y, z, r, g, b, 0, 0, 1, 0, 0});
+            v.insert(v.end(), {x + height/2, y + y1, z + z1, r, g, b, 0, 0, 1, 0, 0});
+            v.insert(v.end(), {x + height/2, y + y2, z + z2, r, g, b, 0, 0, 1, 0, 0});
+        }
+    };
+
     // 큐브 생성 헬퍼 (각 면마다 법선 벡터 다르게 설정)
     auto addFace = [&](float x, float y, float z, float sx, float sy, float sz, float r, float g, float b) {
         float dx = sx / 2, dy = sy / 2, dz = sz / 2;
@@ -205,20 +272,20 @@ void initCubeObj(GLuint* vao, GLuint* vbo, bool isCar) {
         // 3. 본넷/후드 (Hood) - 앞쪽 경사
         addFace(0.0f, 0.05f, -0.5f, 0.6f, 0.15f, 0.4f, 0.9f, 0.15f, 0.15f);
 
-        // 4. 바퀴 4개 - 검은색
+        // 4. 바퀴 4개 - 검은색 원통 형태
         float wheelRadius = 0.15f;
         float wheelWidth = 0.12f;
         float wheelBaseX = 0.45f; // 차체 폭의 바깥쪽
         float wheelBaseZ = 0.4f;  // 앞뒤 간격
 
-        // 왼쪽 앞 바퀴
-        addFace(-wheelBaseX, -0.125f + wheelRadius, -wheelBaseZ, wheelWidth, wheelRadius * 2, wheelRadius * 2, 0.1f, 0.1f, 0.1f);
-        // 오른쪽 앞 바퀴
-        addFace(wheelBaseX, -0.125f + wheelRadius, -wheelBaseZ, wheelWidth, wheelRadius * 2, wheelRadius * 2, 0.1f, 0.1f, 0.1f);
-        // 왼쪽 뒤 바퀴
-        addFace(-wheelBaseX, -0.125f + wheelRadius, wheelBaseZ, wheelWidth, wheelRadius * 2, wheelRadius * 2, 0.1f, 0.1f, 0.1f);
-        // 오른쪽 뒤 바퀴
-        addFace(wheelBaseX, -0.125f + wheelRadius, wheelBaseZ, wheelWidth, wheelRadius * 2, wheelRadius * 2, 0.1f, 0.1f, 0.1f);
+        // 왼쪽 앞 바퀴 (원통)
+        addCylinder(-wheelBaseX, -0.125f + wheelRadius, -wheelBaseZ, wheelRadius, wheelWidth, 0.1f, 0.1f, 0.1f);
+        // 오른쪽 앞 바퀴 (원통)
+        addCylinder(wheelBaseX, -0.125f + wheelRadius, -wheelBaseZ, wheelRadius, wheelWidth, 0.1f, 0.1f, 0.1f);
+        // 왼쪽 뒤 바퀴 (원통)
+        addCylinder(-wheelBaseX, -0.125f + wheelRadius, wheelBaseZ, wheelRadius, wheelWidth, 0.1f, 0.1f, 0.1f);
+        // 오른쪽 뒤 바퀴 (원통)
+        addCylinder(wheelBaseX, -0.125f + wheelRadius, wheelBaseZ, wheelRadius, wheelWidth, 0.1f, 0.1f, 0.1f);
 
         // 5. 앞 유리창 (Windshield) - 하늘색 (유리 느낌)
         addFace(0.0f, 0.3f, -0.15f, 0.55f, 0.2f, 0.15f, 0.3f, 0.5f, 0.7f);
@@ -246,6 +313,33 @@ void initCubeObj(GLuint* vao, GLuint* vbo, bool isCar) {
     glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, stride, (void*)(8 * sizeof(float))); glEnableVertexAttribArray(3);
 }
 
+// 키 상태에 따라 자동차 업데이트
+void updateCar() {
+    float speed = 0.3f;
+    float rotSpeed = 0.02f; // 회전 속도 (라디안)
+
+    // 자동차의 전방 벡터 계산 (자동차는 로컬 -Z 방향을 바라봄)
+    float forwardX = sinf(carAngle);
+    float forwardZ = -cosf(carAngle);
+
+    // 전진/후진
+    if (specialKeyStates[GLUT_KEY_UP]) {
+        carX += speed * forwardX;
+        carZ += speed * forwardZ;
+    }
+    if (specialKeyStates[GLUT_KEY_DOWN]) {
+        carX -= speed * forwardX;
+        carZ -= speed * forwardZ;
+    }
+
+    // 회전
+    if (specialKeyStates[GLUT_KEY_LEFT]) {
+        carAngle -= rotSpeed;
+    }
+    if (specialKeyStates[GLUT_KEY_RIGHT]) {
+        carAngle += rotSpeed;
+    }
+}
 
 GLvoid drawScene() {
     glClearColor(0.05f, 0.05f, 0.1f, 1.0f); // 밤하늘 배경
@@ -352,36 +446,31 @@ GLvoid drawScene() {
     for (int i = 0; i < 16; ++i) model[i] = rot[i];
     glUniformMatrix4fv(modelLoc, 1, GL_FALSE, model);
     glBindVertexArray(carVAO);
-    glDrawArrays(GL_TRIANGLES, 0, 360); // 10개 부품 × 36 정점
+    glDrawArrays(GL_TRIANGLES, 0, 984); // 차체 부품 + 원통 바퀴 4개
 
     glutSwapBuffers();
 }
 
 GLvoid Reshape(int w, int h) { glViewport(0, 0, w, h); }
-void Keyboard(unsigned char key, int x, int y) { if (key == 'q' || key == 'Q' || key == 27) exit(0); glutPostRedisplay(); }
+void Keyboard(unsigned char key, int x, int y) {
+    if (key == 'q' || key == 'Q' || key == 27) exit(0);
+}
+
+// 특수 키 눌림 처리
 void SpecialKeyboard(int key, int x, int y) {
-    float speed = 0.5f;
-    float rotSpeed = 0.1f; // 회전 속도 (라디안)
+    specialKeyStates[key] = true;
+}
 
-    // 자동차의 전방 벡터 계산 (자동차는 로컬 -Z 방향을 바라봄)
-    float forwardX = sinf(carAngle);
-    float forwardZ = -cosf(carAngle);
+// 특수 키 떼어짐 처리
+void SpecialKeyboardUp(int key, int x, int y) {
+    specialKeyStates[key] = false;
+}
 
-    switch (key) {
-    case GLUT_KEY_UP:
-        // 자동차 정면 방향으로 전진
-        carX += speed * forwardX;
-        carZ += speed * forwardZ;
-        break;
-    case GLUT_KEY_DOWN:
-        // 자동차 후면 방향으로 후진
-        carX -= speed * forwardX;
-        carZ -= speed * forwardZ;
-        break;
-    case GLUT_KEY_LEFT:  carAngle -= rotSpeed; break; // Y축 기준 왼쪽 회전 (제자리)
-    case GLUT_KEY_RIGHT: carAngle += rotSpeed; break; // Y축 기준 오른쪽 회전 (제자리)
-    }
+// 타이머 함수 - 일정한 간격으로 호출
+void Timer(int value) {
+    updateCar();
     glutPostRedisplay();
+    glutTimerFunc(16, Timer, 0); // 약 60fps (16ms)
 }
 
 int main(int argc, char** argv) {
@@ -415,6 +504,8 @@ int main(int argc, char** argv) {
     glutReshapeFunc(Reshape);
     glutKeyboardFunc(Keyboard);
     glutSpecialFunc(SpecialKeyboard);
+    glutSpecialUpFunc(SpecialKeyboardUp);
+    glutTimerFunc(16, Timer, 0); // 타이머 시작
 
     glutMainLoop();
     return 0;
