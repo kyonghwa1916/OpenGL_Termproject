@@ -347,13 +347,12 @@ GLvoid drawScene() {
     glUseProgram(shaderProgramID);
 
     // [중요] 카메라 위치 전송 (반사광 계산용)
-    glUniform3f(viewPosLoc, carX, 1.5f, carZ + 4.0f);
+    glUniform3f(viewPosLoc, carX, 1.5f, carZ + 8.0f);
 
     float view[16];
     setIdentityMatrix(view, 4);
-    view[12] = -carX; view[13] = -1.5f; view[14] = -(carZ + 4.0f);
+    view[12] = -carX; view[13] = -1.5f; view[14] = -(carZ + 8.0f);
     glUniformMatrix4fv(viewLoc, 1, GL_FALSE, view);
-
     float projection[16];
     makePerspectiveMatrix(projection, 3.141592f / 4.0f, 800.0f / 600.0f, 0.1f, 300.0f);
     glUniformMatrix4fv(projLoc, 1, GL_FALSE, projection);
