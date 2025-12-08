@@ -8,6 +8,9 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string>
+#include <algorithm>
+#include <fstream>
+#include <sstream>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -27,9 +30,27 @@ char* filetobuf(const char* file) {
 }
 
 // --- 게임 상태 및 전역 변수 ---
-enum GameState { MENU, PLAY, GAMEOVER };
+enum GameState { MENU, PLAY, GAMEOVER, RANKING, NAME_INPUT };
 GameState currentState = MENU;
 int selectedMap = 1; // 1 or 2
+
+// 랭킹 구조체
+struct RankingEntry {
+    int mapType;
+    float time;
+    std::string name;
+
+    bool operator<(const RankingEntry& other) const {
+        return time < other.time;
+    }
+};
+
+std::vector<RankingEntry> rankingsMap1;
+std::vector<RankingEntry> rankingsMap2;
+
+// 이름 입력 관련
+std::string currentInputName = "";
+float recordedTime = 0.0f;
 
 GLuint shaderProgramID;
 GLuint vertexShader, fragmentShader;
@@ -112,6 +133,82 @@ void setRotationYMatrix(float* mat, float angle) {
     float s = sinf(angle);
     mat[0] = c;  mat[2] = s;
     mat[8] = -s; mat[10] = c;
+}
+
+// --- 랭킹 관련 함수 ---
+void loadRankings() {
+    rankingsMap1.clear();
+    rankingsMap2.clear();
+
+    std::ifstream file("rankings.txt");
+    if (file.is_open()) {
+        std::string line;
+        while (std::getline(file, line)) {
+            std::istringstream iss(line);
+            int mapType;
+            float time;
+            std::string name;
+
+            if (iss >> mapType >> time) {
+                // 나머지 부분을 이름으로 읽기
+                std::getline(iss, name);
+                // 앞의 공백 제거
+                if (!name.empty() && name[0] == ' ') {
+                    name = name.substr(1);
+                }
+
+                RankingEntry entry;
+                entry.mapType = mapType;
+                entry.time = time;
+                entry.name = name.empty() ? "Anonymous" : name;
+
+                if (mapType == 1) {
+                    rankingsMap1.push_back(entry);
+                }
+                else if (mapType == 2) {
+                    rankingsMap2.push_back(entry);
+                }
+            }
+        }
+        file.close();
+    }
+
+    std::sort(rankingsMap1.begin(), rankingsMap1.end());
+    std::sort(rankingsMap2.begin(), rankingsMap2.end());
+}
+
+void saveRanking(int mapType, float time, const std::string& name) {
+    RankingEntry newEntry;
+    newEntry.mapType = mapType;
+    newEntry.time = time;
+    newEntry.name = name.empty() ? "Anonymous" : name;
+
+    if (mapType == 1) {
+        rankingsMap1.push_back(newEntry);
+        std::sort(rankingsMap1.begin(), rankingsMap1.end());
+        if (rankingsMap1.size() > 5) {
+            rankingsMap1.resize(5);
+        }
+    }
+    else if (mapType == 2) {
+        rankingsMap2.push_back(newEntry);
+        std::sort(rankingsMap2.begin(), rankingsMap2.end());
+        if (rankingsMap2.size() > 5) {
+            rankingsMap2.resize(5);
+        }
+    }
+
+    // 파일에 저장
+    std::ofstream file("rankings.txt");
+    if (file.is_open()) {
+        for (const auto& entry : rankingsMap1) {
+            file << entry.mapType << " " << entry.time << " " << entry.name << "\n";
+        }
+        for (const auto& entry : rankingsMap2) {
+            file << entry.mapType << " " << entry.time << " " << entry.name << "\n";
+        }
+        file.close();
+    }
 }
 
 // 텍스트 출력 함수
@@ -466,6 +563,11 @@ void updateCar() {
     if (!finishReached && carZ <= FINISH_LINE_Z) {
         finishReached = true;
         elapsedTime = glutGet(GLUT_ELAPSED_TIME) - startTime;
+
+        // 이름 입력 화면으로 전환
+        recordedTime = elapsedTime / 1000.0f;
+        currentInputName = "";
+        currentState = NAME_INPUT;
     }
 
     // --- 충돌 체크 (Collision Detection) ---
@@ -487,6 +589,55 @@ GLvoid drawScene() {
         drawString("=== Select Map ===", 320, 350);
         drawString("Press '1' for Map 1 (Gentle Curve)", 250, 300);
         drawString("Press '2' for Map 2 (Complex Curve)", 250, 270);
+        drawString("Press 'R' to View Rankings", 280, 240);
+        glutSwapBuffers();
+        return;
+    }
+    else if (currentState == NAME_INPUT) {
+        glClearColor(0.1f, 0.15f, 0.1f, 1.0f);
+        drawString("=== FINISH! ===", 330, 400);
+
+        char timeStr[64];
+        sprintf(timeStr, "Your Time: %.2f sec", recordedTime);
+        drawString(timeStr, 310, 350);
+
+        drawString("Enter Your Name:", 300, 300);
+
+        // 입력된 이름 표시 (커서 포함)
+        std::string displayName = currentInputName + "_";
+        drawString(displayName.c_str(), 320, 260);
+
+        drawString("Press ENTER to save", 290, 200);
+        drawString("Max 10 characters", 300, 170);
+
+        glutSwapBuffers();
+        return;
+    }
+    else if (currentState == RANKING) {
+        glClearColor(0.1f, 0.1f, 0.15f, 1.0f);
+        drawString("=== RANKINGS ===", 330, 550);
+
+        // Map 1 Rankings
+        drawString("Map 1 - Gentle Curve", 100, 500);
+        int yPos = 460;
+        for (size_t i = 0; i < rankingsMap1.size(); i++) {
+            char rankStr[128];
+            sprintf(rankStr, "%d. %-12s %.2f sec", (int)(i + 1), rankingsMap1[i].name.c_str(), rankingsMap1[i].time);
+            drawString(rankStr, 100, yPos);
+            yPos -= 30;
+        }
+
+        // Map 2 Rankings
+        drawString("Map 2 - Complex Curve", 450, 500);
+        yPos = 460;
+        for (size_t i = 0; i < rankingsMap2.size(); i++) {
+            char rankStr[128];
+            sprintf(rankStr, "%d. %-12s %.2f sec", (int)(i + 1), rankingsMap2[i].name.c_str(), rankingsMap2[i].time);
+            drawString(rankStr, 450, yPos);
+            yPos -= 30;
+        }
+
+        drawString("Press 'ESC' to return to Menu", 270, 50);
         glutSwapBuffers();
         return;
     }
@@ -640,11 +791,38 @@ GLvoid drawScene() {
 
 GLvoid Reshape(int w, int h) { glViewport(0, 0, w, h); }
 void Keyboard(unsigned char key, int x, int y) {
-    if (key == 'q' || key == 'Q' || key == 27) exit(0);
+    if (key == 'q' || key == 'Q') exit(0);
 
     if (currentState == MENU) {
         if (key == '1') initGame(1);
         if (key == '2') initGame(2);
+        if (key == 'r' || key == 'R') {
+            loadRankings();
+            currentState = RANKING;
+        }
+    }
+    else if (currentState == NAME_INPUT) {
+        if (key == 13) { // ENTER key
+            // 이름 저장하고 메뉴로
+            saveRanking(selectedMap, recordedTime, currentInputName);
+            loadRankings(); // 랭킹 다시 로드
+            currentState = MENU;
+        }
+        else if (key == 8) { // BACKSPACE key
+            if (!currentInputName.empty()) {
+                currentInputName.pop_back();
+            }
+        }
+        else if (key >= 32 && key <= 126) { // 출력 가능한 ASCII 문자
+            if (currentInputName.length() < 10) {
+                currentInputName += key;
+            }
+        }
+    }
+    else if (currentState == RANKING) {
+        if (key == 27) { // ESC key
+            currentState = MENU;
+        }
     }
     else if (currentState == GAMEOVER) {
         if (key == 'r' || key == 'R') {
@@ -672,6 +850,9 @@ int main(int argc, char** argv) {
     glewExperimental = GL_TRUE;
     if (glewInit() != GLEW_OK) exit(EXIT_FAILURE);
     glEnable(GL_DEPTH_TEST);
+
+    // 랭킹 로드
+    loadRankings();
 
     make_Shaders();
 
