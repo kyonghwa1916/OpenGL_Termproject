@@ -36,6 +36,7 @@ GLuint vertexShader, fragmentShader;
 GLuint bgVAO, bgVBO;
 GLuint carVAO, carVBO;
 GLuint lightVAO, lightVBO;
+GLuint finishLineVAO, finishLineVBO;
 
 GLuint roadTextureID, dirtTextureID;
 
@@ -52,9 +53,10 @@ const float ROAD_WIDTH = 2.0f;       // 도로 전체 폭
 const float SIDEWALK_WIDTH = 1.5f;   // 인도 폭
 const float CAR_COLLISION_RADIUS = 0.5f; // 자동차 충돌 반경
 const float TRACK_RADIUS = 80.0f; // 트랙의 반지름 (크기)
-const int TRACK_SEGMENTS = 360;   // 원을 몇 개로 쪼갤지    
+const int TRACK_SEGMENTS = 360;   // 원을 몇 개로 쪼갤지
 int vertexCountRoad = 0;
 int vertexCountSidewalk = 0;
+const float FINISH_LINE_Z = -495.0f; // 피니시라인 위치
 
 // 키 상태 추적
 bool specialKeyStates[256] = { false };
@@ -278,6 +280,51 @@ void initMapBuffer(int mapType) {
     glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, stride, (void*)(8 * sizeof(float))); glEnableVertexAttribArray(3);
 }
 
+// 피니시라인 생성 함수
+void initFinishLine(int mapType) {
+    std::vector<float> v;
+
+    float finishZ = FINISH_LINE_Z;
+    float centerX = getRoadCenterX(finishZ, mapType);
+    float halfW = ROAD_WIDTH / 2.0f;
+    float finishY = -0.48f; // 도로보다 약간 위에 띄워서 그려짐
+
+    // 노란색 피니시라인 (도로 전체 폭에 걸쳐서)
+    float lineThickness = 0.5f; // 라인 두께
+
+    // 왼쪽 -> 오른쪽, 앞 -> 뒤
+    float x1 = centerX - halfW - 1.0f;
+    float x2 = centerX + halfW + 1.0f;
+    float z1 = finishZ - lineThickness / 2.0f;
+    float z2 = finishZ + lineThickness / 2.0f;
+
+    // 노란색 (1.0, 1.0, 0.0)
+    float ny = 1.0f; // 법선 벡터 (위를 향함)
+
+    // 첫 번째 삼각형
+    v.insert(v.end(), { x1, finishY, z1,  1.0f, 1.0f, 0.0f,  0.0f, 0.0f,  0, ny, 0 });
+    v.insert(v.end(), { x2, finishY, z1,  1.0f, 1.0f, 0.0f,  1.0f, 0.0f,  0, ny, 0 });
+    v.insert(v.end(), { x2, finishY, z2,  1.0f, 1.0f, 0.0f,  1.0f, 1.0f,  0, ny, 0 });
+
+    // 두 번째 삼각형
+    v.insert(v.end(), { x1, finishY, z1,  1.0f, 1.0f, 0.0f,  0.0f, 0.0f,  0, ny, 0 });
+    v.insert(v.end(), { x2, finishY, z2,  1.0f, 1.0f, 0.0f,  1.0f, 1.0f,  0, ny, 0 });
+    v.insert(v.end(), { x1, finishY, z2,  1.0f, 1.0f, 0.0f,  0.0f, 1.0f,  0, ny, 0 });
+
+    if (finishLineVAO == 0) glGenVertexArrays(1, &finishLineVAO);
+    if (finishLineVBO == 0) glGenBuffers(1, &finishLineVBO);
+
+    glBindVertexArray(finishLineVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, finishLineVBO);
+    glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(float), v.data(), GL_STATIC_DRAW);
+
+    int stride = 11 * sizeof(float);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0); glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)(3 * sizeof(float))); glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, (void*)(6 * sizeof(float))); glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, stride, (void*)(8 * sizeof(float))); glEnableVertexAttribArray(3);
+}
+
 // 큐브/오브젝트 생성 함수
 void initCubeObj(GLuint* vao, GLuint* vbo, bool isCar) {
     std::vector<float> v;
@@ -364,6 +411,7 @@ void initGame(int map) {
     carZ = 0.0f;
     carAngle = 0.0f;
     initMapBuffer(map);
+    initFinishLine(map); // 피니시라인 생성
     currentState = PLAY;
 }
 
@@ -492,6 +540,13 @@ GLvoid drawScene() {
     // 2) 인도 그리기
     glBindTexture(GL_TEXTURE_2D, dirtTextureID);
     glDrawArrays(GL_TRIANGLES, vertexCountRoad, vertexCountSidewalk);
+
+    // 2.5) 피니시라인 그리기
+    glUniform1i(useTextureLoc, 0); // 텍스처 사용 안 함
+    glBindVertexArray(finishLineVAO);
+    setIdentityMatrix(model, 4);
+    glUniformMatrix4fv(modelLoc, 1, GL_FALSE, model);
+    glDrawArrays(GL_TRIANGLES, 0, 6); // 6개의 정점 (2개의 삼각형)
 
     // --- [3] 가로등 ---
     glUniform1i(useTextureLoc, 0);
