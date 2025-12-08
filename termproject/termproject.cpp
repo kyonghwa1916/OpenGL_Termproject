@@ -8,6 +8,9 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string>
+#include <algorithm>
+#include <fstream>
+#include <sstream>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -27,15 +30,34 @@ char* filetobuf(const char* file) {
 }
 
 // --- 게임 상태 및 전역 변수 ---
-enum GameState { MENU, PLAY, GAMEOVER };
+enum GameState { MENU, PLAY, GAMEOVER, RANKING, NAME_INPUT };
 GameState currentState = MENU;
 int selectedMap = 1; // 1 or 2
+
+// 랭킹 구조체
+struct RankingEntry {
+    int mapType;
+    float time;
+    std::string name;
+
+    bool operator<(const RankingEntry& other) const {
+        return time < other.time;
+    }
+};
+
+std::vector<RankingEntry> rankingsMap1;
+std::vector<RankingEntry> rankingsMap2;
+
+// 이름 입력 관련
+std::string currentInputName = "";
+float recordedTime = 0.0f;
 
 GLuint shaderProgramID;
 GLuint vertexShader, fragmentShader;
 GLuint bgVAO, bgVBO;
 GLuint carVAO, carVBO;
 GLuint lightVAO, lightVBO;
+GLuint finishLineVAO, finishLineVBO;
 
 GLuint roadTextureID, dirtTextureID;
 
@@ -47,14 +69,21 @@ float carX = 0.0f;
 float carZ = 0.0f;
 float carAngle = 0.0f;
 
+// 타이머 관련
+bool timerStarted = false;
+int startTime = 0;
+int elapsedTime = 0;
+bool finishReached = false;
+
 // 도로 설정
 const float ROAD_WIDTH = 2.0f;       // 도로 전체 폭
 const float SIDEWALK_WIDTH = 1.5f;   // 인도 폭
 const float CAR_COLLISION_RADIUS = 0.5f; // 자동차 충돌 반경
 const float TRACK_RADIUS = 80.0f; // 트랙의 반지름 (크기)
-const int TRACK_SEGMENTS = 360;   // 원을 몇 개로 쪼갤지    
+const int TRACK_SEGMENTS = 360;   // 원을 몇 개로 쪼갤지
 int vertexCountRoad = 0;
 int vertexCountSidewalk = 0;
+const float FINISH_LINE_Z = -495.0f; // 피니시라인 위치
 
 // 키 상태 추적
 bool specialKeyStates[256] = { false };
@@ -104,6 +133,82 @@ void setRotationYMatrix(float* mat, float angle) {
     float s = sinf(angle);
     mat[0] = c;  mat[2] = s;
     mat[8] = -s; mat[10] = c;
+}
+
+// --- 랭킹 관련 함수 ---
+void loadRankings() {
+    rankingsMap1.clear();
+    rankingsMap2.clear();
+
+    std::ifstream file("rankings.txt");
+    if (file.is_open()) {
+        std::string line;
+        while (std::getline(file, line)) {
+            std::istringstream iss(line);
+            int mapType;
+            float time;
+            std::string name;
+
+            if (iss >> mapType >> time) {
+                // 나머지 부분을 이름으로 읽기
+                std::getline(iss, name);
+                // 앞의 공백 제거
+                if (!name.empty() && name[0] == ' ') {
+                    name = name.substr(1);
+                }
+
+                RankingEntry entry;
+                entry.mapType = mapType;
+                entry.time = time;
+                entry.name = name.empty() ? "Anonymous" : name;
+
+                if (mapType == 1) {
+                    rankingsMap1.push_back(entry);
+                }
+                else if (mapType == 2) {
+                    rankingsMap2.push_back(entry);
+                }
+            }
+        }
+        file.close();
+    }
+
+    std::sort(rankingsMap1.begin(), rankingsMap1.end());
+    std::sort(rankingsMap2.begin(), rankingsMap2.end());
+}
+
+void saveRanking(int mapType, float time, const std::string& name) {
+    RankingEntry newEntry;
+    newEntry.mapType = mapType;
+    newEntry.time = time;
+    newEntry.name = name.empty() ? "Anonymous" : name;
+
+    if (mapType == 1) {
+        rankingsMap1.push_back(newEntry);
+        std::sort(rankingsMap1.begin(), rankingsMap1.end());
+        if (rankingsMap1.size() > 5) {
+            rankingsMap1.resize(5);
+        }
+    }
+    else if (mapType == 2) {
+        rankingsMap2.push_back(newEntry);
+        std::sort(rankingsMap2.begin(), rankingsMap2.end());
+        if (rankingsMap2.size() > 5) {
+            rankingsMap2.resize(5);
+        }
+    }
+
+    // 파일에 저장
+    std::ofstream file("rankings.txt");
+    if (file.is_open()) {
+        for (const auto& entry : rankingsMap1) {
+            file << entry.mapType << " " << entry.time << " " << entry.name << "\n";
+        }
+        for (const auto& entry : rankingsMap2) {
+            file << entry.mapType << " " << entry.time << " " << entry.name << "\n";
+        }
+        file.close();
+    }
 }
 
 // 텍스트 출력 함수
@@ -185,8 +290,8 @@ void initMapBuffer(int mapType) {
     float step = 2.0f;
     float startZ = 20.0f;
 
-    // 도로 길이 -20000으로 변경
-    float endZ = -20000.0f;
+    // 도로 길이 -500으로 변경
+    float endZ = -500.0f;
 
     float halfW = ROAD_WIDTH / 2.0f;
 
@@ -269,6 +374,51 @@ void initMapBuffer(int mapType) {
 
     glBindVertexArray(bgVAO);
     glBindBuffer(GL_ARRAY_BUFFER, bgVBO);
+    glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(float), v.data(), GL_STATIC_DRAW);
+
+    int stride = 11 * sizeof(float);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0); glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)(3 * sizeof(float))); glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, (void*)(6 * sizeof(float))); glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, stride, (void*)(8 * sizeof(float))); glEnableVertexAttribArray(3);
+}
+
+// 피니시라인 생성 함수
+void initFinishLine(int mapType) {
+    std::vector<float> v;
+
+    float finishZ = FINISH_LINE_Z;
+    float centerX = getRoadCenterX(finishZ, mapType);
+    float halfW = ROAD_WIDTH / 2.0f;
+    float finishY = -0.48f; // 도로보다 약간 위에 띄워서 그려짐
+
+    // 노란색 피니시라인 (도로 전체 폭에 걸쳐서)
+    float lineThickness = 0.5f; // 라인 두께
+
+    // 왼쪽 -> 오른쪽, 앞 -> 뒤
+    float x1 = centerX - halfW - 1.0f;
+    float x2 = centerX + halfW + 1.0f;
+    float z1 = finishZ - lineThickness / 2.0f;
+    float z2 = finishZ + lineThickness / 2.0f;
+
+    // 노란색 (1.0, 1.0, 0.0)
+    float ny = 1.0f; // 법선 벡터 (위를 향함)
+
+    // 첫 번째 삼각형
+    v.insert(v.end(), { x1, finishY, z1,  1.0f, 1.0f, 0.0f,  0.0f, 0.0f,  0, ny, 0 });
+    v.insert(v.end(), { x2, finishY, z1,  1.0f, 1.0f, 0.0f,  1.0f, 0.0f,  0, ny, 0 });
+    v.insert(v.end(), { x2, finishY, z2,  1.0f, 1.0f, 0.0f,  1.0f, 1.0f,  0, ny, 0 });
+
+    // 두 번째 삼각형
+    v.insert(v.end(), { x1, finishY, z1,  1.0f, 1.0f, 0.0f,  0.0f, 0.0f,  0, ny, 0 });
+    v.insert(v.end(), { x2, finishY, z2,  1.0f, 1.0f, 0.0f,  1.0f, 1.0f,  0, ny, 0 });
+    v.insert(v.end(), { x1, finishY, z2,  1.0f, 1.0f, 0.0f,  0.0f, 1.0f,  0, ny, 0 });
+
+    if (finishLineVAO == 0) glGenVertexArrays(1, &finishLineVAO);
+    if (finishLineVBO == 0) glGenBuffers(1, &finishLineVBO);
+
+    glBindVertexArray(finishLineVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, finishLineVBO);
     glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(float), v.data(), GL_STATIC_DRAW);
 
     int stride = 11 * sizeof(float);
@@ -363,7 +513,12 @@ void initGame(int map) {
     carX = getRoadCenterX(0.0f, map); // 도로 중앙에서 시작
     carZ = 0.0f;
     carAngle = 0.0f;
+    timerStarted = false;
+    startTime = 0;
+    elapsedTime = 0;
+    finishReached = false;
     initMapBuffer(map);
+    initFinishLine(map); // 피니시라인 생성
     currentState = PLAY;
 }
 
@@ -376,6 +531,13 @@ void updateCar() {
 
     float forwardX = sinf(carAngle);
     float forwardZ = -cosf(carAngle);
+
+    // 방향키가 입력되면 타이머 시작
+    if (!timerStarted && (specialKeyStates[GLUT_KEY_UP] || specialKeyStates[GLUT_KEY_DOWN] ||
+                          specialKeyStates[GLUT_KEY_LEFT] || specialKeyStates[GLUT_KEY_RIGHT])) {
+        timerStarted = true;
+        startTime = glutGet(GLUT_ELAPSED_TIME);
+    }
 
     if (specialKeyStates[GLUT_KEY_UP]) {
         carX += speed * forwardX;
@@ -390,6 +552,22 @@ void updateCar() {
     }
     if (specialKeyStates[GLUT_KEY_RIGHT]) {
         carAngle += rotSpeed;
+    }
+
+    // 타이머가 시작되었고 아직 피니시라인에 도달하지 않았다면 시간 업데이트
+    if (timerStarted && !finishReached) {
+        elapsedTime = glutGet(GLUT_ELAPSED_TIME) - startTime;
+    }
+
+    // 피니시라인 도달 체크
+    if (!finishReached && carZ <= FINISH_LINE_Z) {
+        finishReached = true;
+        elapsedTime = glutGet(GLUT_ELAPSED_TIME) - startTime;
+
+        // 이름 입력 화면으로 전환
+        recordedTime = elapsedTime / 1000.0f;
+        currentInputName = "";
+        currentState = NAME_INPUT;
     }
 
     // --- 충돌 체크 (Collision Detection) ---
@@ -411,6 +589,55 @@ GLvoid drawScene() {
         drawString("=== Select Map ===", 320, 350);
         drawString("Press '1' for Map 1 (Gentle Curve)", 250, 300);
         drawString("Press '2' for Map 2 (Complex Curve)", 250, 270);
+        drawString("Press 'R' to View Rankings", 280, 240);
+        glutSwapBuffers();
+        return;
+    }
+    else if (currentState == NAME_INPUT) {
+        glClearColor(0.1f, 0.15f, 0.1f, 1.0f);
+        drawString("=== FINISH! ===", 330, 400);
+
+        char timeStr[64];
+        sprintf(timeStr, "Your Time: %.2f sec", recordedTime);
+        drawString(timeStr, 310, 350);
+
+        drawString("Enter Your Name:", 300, 300);
+
+        // 입력된 이름 표시 (커서 포함)
+        std::string displayName = currentInputName + "_";
+        drawString(displayName.c_str(), 320, 260);
+
+        drawString("Press ENTER to save", 290, 200);
+        drawString("Max 10 characters", 300, 170);
+
+        glutSwapBuffers();
+        return;
+    }
+    else if (currentState == RANKING) {
+        glClearColor(0.1f, 0.1f, 0.15f, 1.0f);
+        drawString("=== RANKINGS ===", 330, 550);
+
+        // Map 1 Rankings
+        drawString("Map 1 - Gentle Curve", 100, 500);
+        int yPos = 460;
+        for (size_t i = 0; i < rankingsMap1.size(); i++) {
+            char rankStr[128];
+            sprintf(rankStr, "%d. %-12s %.2f sec", (int)(i + 1), rankingsMap1[i].name.c_str(), rankingsMap1[i].time);
+            drawString(rankStr, 100, yPos);
+            yPos -= 30;
+        }
+
+        // Map 2 Rankings
+        drawString("Map 2 - Complex Curve", 450, 500);
+        yPos = 460;
+        for (size_t i = 0; i < rankingsMap2.size(); i++) {
+            char rankStr[128];
+            sprintf(rankStr, "%d. %-12s %.2f sec", (int)(i + 1), rankingsMap2[i].name.c_str(), rankingsMap2[i].time);
+            drawString(rankStr, 450, yPos);
+            yPos -= 30;
+        }
+
+        drawString("Press 'ESC' to return to Menu", 270, 50);
         glutSwapBuffers();
         return;
     }
@@ -493,10 +720,17 @@ GLvoid drawScene() {
     glBindTexture(GL_TEXTURE_2D, dirtTextureID);
     glDrawArrays(GL_TRIANGLES, vertexCountRoad, vertexCountSidewalk);
 
+    // 2.5) 피니시라인 그리기
+    glUniform1i(useTextureLoc, 0); // 텍스처 사용 안 함
+    glBindVertexArray(finishLineVAO);
+    setIdentityMatrix(model, 4);
+    glUniformMatrix4fv(modelLoc, 1, GL_FALSE, model);
+    glDrawArrays(GL_TRIANGLES, 0, 6); // 6개의 정점 (2개의 삼각형)
+
     // --- [3] 가로등 ---
     glUniform1i(useTextureLoc, 0);
     glBindVertexArray(lightVAO);
-    for (float z = 20.0f; z > -20000.0f; z -= 20.0f) {
+    for (float z = 20.0f; z > -500.0f; z -= 20.0f) {
 
         float cx = getRoadCenterX(z, selectedMap);
         float angle = getRoadAngle(z, selectedMap);
@@ -525,9 +759,31 @@ GLvoid drawScene() {
     glBindVertexArray(carVAO);
     glDrawArrays(GL_TRIANGLES, 0, 984);
 
+    // 타이머 표시
+    if (currentState == PLAY && timerStarted) {
+        char timeStr[64];
+        float seconds = elapsedTime / 1000.0f;
+        sprintf(timeStr, "Time: %.2f sec", seconds);
+        drawString(timeStr, 20, 560);
+
+        if (finishReached) {
+            drawString("FINISH!", 350, 300);
+            char finalTimeStr[64];
+            sprintf(finalTimeStr, "Final Time: %.2f sec", seconds);
+            drawString(finalTimeStr, 310, 270);
+        }
+    }
+
     if (currentState == GAMEOVER) {
         drawString("GAME OVER", 350, 300);
         drawString("Press 'R' to Restart", 320, 270);
+
+        if (timerStarted) {
+            char timeStr[64];
+            float seconds = elapsedTime / 1000.0f;
+            sprintf(timeStr, "Time: %.2f sec", seconds);
+            drawString(timeStr, 320, 240);
+        }
     }
 
     glutSwapBuffers();
@@ -535,11 +791,38 @@ GLvoid drawScene() {
 
 GLvoid Reshape(int w, int h) { glViewport(0, 0, w, h); }
 void Keyboard(unsigned char key, int x, int y) {
-    if (key == 'q' || key == 'Q' || key == 27) exit(0);
+    if (key == 'q' || key == 'Q') exit(0);
 
     if (currentState == MENU) {
         if (key == '1') initGame(1);
         if (key == '2') initGame(2);
+        if (key == 'r' || key == 'R') {
+            loadRankings();
+            currentState = RANKING;
+        }
+    }
+    else if (currentState == NAME_INPUT) {
+        if (key == 13) { // ENTER key
+            // 이름 저장하고 메뉴로
+            saveRanking(selectedMap, recordedTime, currentInputName);
+            loadRankings(); // 랭킹 다시 로드
+            currentState = MENU;
+        }
+        else if (key == 8) { // BACKSPACE key
+            if (!currentInputName.empty()) {
+                currentInputName.pop_back();
+            }
+        }
+        else if (key >= 32 && key <= 126) { // 출력 가능한 ASCII 문자
+            if (currentInputName.length() < 10) {
+                currentInputName += key;
+            }
+        }
+    }
+    else if (currentState == RANKING) {
+        if (key == 27) { // ESC key
+            currentState = MENU;
+        }
     }
     else if (currentState == GAMEOVER) {
         if (key == 'r' || key == 'R') {
@@ -567,6 +850,9 @@ int main(int argc, char** argv) {
     glewExperimental = GL_TRUE;
     if (glewInit() != GLEW_OK) exit(EXIT_FAILURE);
     glEnable(GL_DEPTH_TEST);
+
+    // 랭킹 로드
+    loadRankings();
 
     make_Shaders();
 
