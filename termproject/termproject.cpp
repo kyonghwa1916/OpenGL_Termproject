@@ -48,7 +48,7 @@ float carZ = 0.0f;
 float carAngle = 0.0f;
 
 // 도로 설정
-const float ROAD_WIDTH = 4.0f;       // 도로 전체 폭
+const float ROAD_WIDTH = 2.0f;       // 도로 전체 폭
 const float SIDEWALK_WIDTH = 1.5f;   // 인도 폭
 const float CAR_COLLISION_RADIUS = 0.5f; // 자동차 충돌 반경
 const float TRACK_RADIUS = 80.0f; // 트랙의 반지름 (크기)
