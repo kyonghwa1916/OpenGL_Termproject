@@ -48,6 +48,12 @@ float carX = 0.0f;
 float carZ = 0.0f;
 float carAngle = 0.0f;
 
+// 타이머 관련
+bool timerStarted = false;
+int startTime = 0;
+int elapsedTime = 0;
+bool finishReached = false;
+
 // 도로 설정
 const float ROAD_WIDTH = 2.0f;       // 도로 전체 폭
 const float SIDEWALK_WIDTH = 1.5f;   // 인도 폭
@@ -410,6 +416,10 @@ void initGame(int map) {
     carX = getRoadCenterX(0.0f, map); // 도로 중앙에서 시작
     carZ = 0.0f;
     carAngle = 0.0f;
+    timerStarted = false;
+    startTime = 0;
+    elapsedTime = 0;
+    finishReached = false;
     initMapBuffer(map);
     initFinishLine(map); // 피니시라인 생성
     currentState = PLAY;
@@ -425,6 +435,13 @@ void updateCar() {
     float forwardX = sinf(carAngle);
     float forwardZ = -cosf(carAngle);
 
+    // 방향키가 입력되면 타이머 시작
+    if (!timerStarted && (specialKeyStates[GLUT_KEY_UP] || specialKeyStates[GLUT_KEY_DOWN] ||
+                          specialKeyStates[GLUT_KEY_LEFT] || specialKeyStates[GLUT_KEY_RIGHT])) {
+        timerStarted = true;
+        startTime = glutGet(GLUT_ELAPSED_TIME);
+    }
+
     if (specialKeyStates[GLUT_KEY_UP]) {
         carX += speed * forwardX;
         carZ += speed * forwardZ;
@@ -438,6 +455,17 @@ void updateCar() {
     }
     if (specialKeyStates[GLUT_KEY_RIGHT]) {
         carAngle += rotSpeed;
+    }
+
+    // 타이머가 시작되었고 아직 피니시라인에 도달하지 않았다면 시간 업데이트
+    if (timerStarted && !finishReached) {
+        elapsedTime = glutGet(GLUT_ELAPSED_TIME) - startTime;
+    }
+
+    // 피니시라인 도달 체크
+    if (!finishReached && carZ <= FINISH_LINE_Z) {
+        finishReached = true;
+        elapsedTime = glutGet(GLUT_ELAPSED_TIME) - startTime;
     }
 
     // --- 충돌 체크 (Collision Detection) ---
@@ -580,9 +608,31 @@ GLvoid drawScene() {
     glBindVertexArray(carVAO);
     glDrawArrays(GL_TRIANGLES, 0, 984);
 
+    // 타이머 표시
+    if (currentState == PLAY && timerStarted) {
+        char timeStr[64];
+        float seconds = elapsedTime / 1000.0f;
+        sprintf(timeStr, "Time: %.2f sec", seconds);
+        drawString(timeStr, 20, 560);
+
+        if (finishReached) {
+            drawString("FINISH!", 350, 300);
+            char finalTimeStr[64];
+            sprintf(finalTimeStr, "Final Time: %.2f sec", seconds);
+            drawString(finalTimeStr, 310, 270);
+        }
+    }
+
     if (currentState == GAMEOVER) {
         drawString("GAME OVER", 350, 300);
         drawString("Press 'R' to Restart", 320, 270);
+
+        if (timerStarted) {
+            char timeStr[64];
+            float seconds = elapsedTime / 1000.0f;
+            sprintf(timeStr, "Time: %.2f sec", seconds);
+            drawString(timeStr, 320, 240);
+        }
     }
 
     glutSwapBuffers();
