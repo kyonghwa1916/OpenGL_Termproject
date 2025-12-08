@@ -185,8 +185,8 @@ void initMapBuffer(int mapType) {
     float step = 2.0f;
     float startZ = 20.0f;
 
-    // 도로 길이 -20000으로 변경
-    float endZ = -20000.0f;
+    // 도로 길이 -500으로 변경
+    float endZ = -500.0f;
 
     float halfW = ROAD_WIDTH / 2.0f;
 
@@ -496,7 +496,7 @@ GLvoid drawScene() {
     // --- [3] 가로등 ---
     glUniform1i(useTextureLoc, 0);
     glBindVertexArray(lightVAO);
-    for (float z = 20.0f; z > -20000.0f; z -= 20.0f) {
+    for (float z = 20.0f; z > -500.0f; z -= 20.0f) {
 
         float cx = getRoadCenterX(z, selectedMap);
         float angle = getRoadAngle(z, selectedMap);
